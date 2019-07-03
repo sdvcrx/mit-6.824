@@ -4,6 +4,7 @@ import (
 	"hash/fnv"
 	"io/ioutil"
 	"encoding/json"
+	"bufio"
 	"log"
 	"os"
 )
@@ -64,6 +65,7 @@ func doMap(
 	}
 
     var intermediateFiles []*os.File;
+    var bufWriters []*bufio.Writer;
     var encs []*json.Encoder;
     for i := 0; i < nReduce; i++ {
         outputFileName := reduceName(jobName, mapTask, i);
@@ -73,10 +75,16 @@ func doMap(
             log.Fatalln("doMap: OpenFile", err);
         }
         intermediateFiles = append(intermediateFiles, intermediateFile);
-        enc := json.NewEncoder(intermediateFile);
+        w := bufio.NewWriter(intermediateFile);
+        bufWriters = append(bufWriters, w);
+        enc := json.NewEncoder(w);
         encs = append(encs, enc);
     }
 	defer func() {
+        for _, w := range bufWriters {
+            w.Flush();
+        }
+
         for _, file := range intermediateFiles {
             file.Close();
         }

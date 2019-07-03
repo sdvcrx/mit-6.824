@@ -4,6 +4,7 @@ import (
     "io"
     "os"
     "log"
+    "bufio"
     "encoding/json"
 )
 
@@ -53,6 +54,7 @@ func doReduce(
 	//
     
     var intermediateFiles []*os.File;
+    var bufReaders []*bufio.Reader;
     var decs []*json.Decoder;
 
     for i := 0; i < nMap; i++ {
@@ -61,7 +63,11 @@ func doReduce(
         if (err != nil) {
             log.Fatalln("os.Open", err);
         }
-        dec := json.NewDecoder(intermediateFile);
+
+        r := bufio.NewReader(intermediateFile);
+        bufReaders = append(bufReaders, r);
+
+        dec := json.NewDecoder(r);
         decs = append(decs, dec);
     }
     defer func() {
