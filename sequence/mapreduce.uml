@@ -1,0 +1,27 @@
+@startuml
+
+participant "Master" as M
+participant "Master RPC Server" as MR
+participant "Worker" as W
+participant "Worker RPC Server" as WR
+
+[-> M: master setup
+activate M
+
+M -> M: Distributed("test", files, nReduce, master)
+M -> MR: mr.startRPCServer()
+activate MR
+
+MR -> M: mr.run(jobName, files, nReduce, MapFunc, ReduceFunc)
+
+M -> W: loop go RunWorker(mr, workers, MapFunc, ReduceFunc, -1, nil)
+activate W
+
+W -> WR: start Worker RPC Server
+activate WR
+
+W -> MR: Master.Register
+
+[<- M: master.Wait()
+deactivate M
+@enduml
