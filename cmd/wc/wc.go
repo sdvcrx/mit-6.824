@@ -3,11 +3,11 @@ package main
 import (
 	"fmt"
 	"github.com/sdvcrx/mit-6.824/mapreduce"
-    "unicode"
-    "strconv"
-    "strings"
+	"unicode"
+	"strconv"
+	"strings"
 	"os"
-    "log"
+	"log"
 )
 
 //
@@ -18,16 +18,16 @@ import (
 // of key/value pairs.
 //
 func mapF(filename string, contents string) []mapreduce.KeyValue {
-    log.Printf("filename: %s", filename);
-    var kvs []mapreduce.KeyValue;
-    words := strings.FieldsFunc(contents, func(c rune) bool {
-        return !unicode.IsLetter(c) && !unicode.IsNumber(c);
-    });
-    for _, word := range words {
-        kv := mapreduce.KeyValue{Key: word, Value: ""};
-        kvs = append(kvs, kv);
-    }
-    return kvs;
+	log.Printf("filename: %s", filename);
+	var kvs []mapreduce.KeyValue;
+	words := strings.FieldsFunc(contents, func(c rune) bool {
+		return !unicode.IsLetter(c) && !unicode.IsNumber(c);
+	});
+	for _, word := range words {
+		kv := mapreduce.KeyValue{Key: word, Value: ""};
+		kvs = append(kvs, kv);
+	}
+	return kvs;
 }
 
 //
@@ -36,7 +36,7 @@ func mapF(filename string, contents string) []mapreduce.KeyValue {
 // any map task.
 //
 func reduceF(key string, values []string) string {
-    return strconv.Itoa(len(values));
+	return strconv.Itoa(len(values));
 }
 
 // Can be run in 3 ways:
