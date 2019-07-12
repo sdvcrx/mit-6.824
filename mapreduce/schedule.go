@@ -1,6 +1,9 @@
 package mapreduce
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 //
 // schedule() starts and waits for all tasks in the given phase (mapPhase
@@ -27,8 +30,54 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 
 	// All ntasks tasks have to be scheduled on workers. Once all tasks
 	// have completed successfully, schedule() should return.
-	//
-	// TODO Your code here (Part III, Part IV).
-	//
+
+	taskQueue := make(chan int, ntasks)
+	done := make(chan bool)    // use it to close all goroutines
+	var wg sync.WaitGroup
+
+	for i := 0; i < ntasks; i++ {
+		taskQueue <- i
+		wg.Add(1)
+	}
+
+	go func() {
+		for {
+			select {
+			case <-done:
+				debug("Worker quit...\n")
+				return
+			case worker := <-registerChan:
+				go func(wk string) {
+					for {
+						select {
+						case <-done:
+							debug("Worker quit...\n")
+							return
+						case task := <-taskQueue:
+							debug("start to DoTask, task=%d, file: %s\n", task, mapFiles[task])
+							args := DoTaskArgs{
+								JobName: jobName,
+								File: mapFiles[task],
+								TaskNumber: task,
+								Phase: phase,
+								NumOtherPhase: n_other,
+							}
+							ok := call(wk, "Worker.DoTask", args, new(struct {}))
+							if !ok {
+								taskQueue <- task    // push failed tash back to taskQueue
+								fmt.Printf("Worker DoTask error: worker=%s, task=%d\n", wk, task)
+							} else {
+								wg.Done()
+							}
+						}
+					}
+				}(worker)
+			}
+		}
+	}()
+
+	// block until all tasks finished
+	wg.Wait()
+
 	fmt.Printf("Schedule: %v done\n", phase)
 }

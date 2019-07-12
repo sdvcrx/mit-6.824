@@ -124,7 +124,7 @@ func port(suffix string) string {
 	s += strconv.Itoa(os.Getuid()) + "/"
 	os.Mkdir(s, 0777)
 	s += "mr"
-	s += strconv.Itoa(os.Getpid()) + "-"
+	// s += strconv.Itoa(os.Getpid()) + "-"
 	s += suffix
 	return s
 }
