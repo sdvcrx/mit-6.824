@@ -66,6 +66,8 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 							if !ok {
 								taskQueue <- task    // push failed tash back to taskQueue
 								fmt.Printf("Worker DoTask error: worker=%s, task=%d\n", wk, task)
+								// exit if worker is down
+								return
 							} else {
 								wg.Done()
 							}
