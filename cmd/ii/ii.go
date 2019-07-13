@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
-	"github.com/sdvcrx/mit-6.824/mapreduce"
+	"mitlab/mapreduce"
 )
 
 

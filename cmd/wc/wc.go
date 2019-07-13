@@ -2,12 +2,12 @@ package main
 
 import (
 	"fmt"
-	"github.com/sdvcrx/mit-6.824/mapreduce"
 	"unicode"
 	"strconv"
 	"strings"
 	"os"
 	"log"
+	"mitlab/mapreduce"
 )
 
 //

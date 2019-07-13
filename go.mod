@@ -1,3 +1,3 @@
-module github.com/sdvcrx/mit-6.824
+module mitlab
 
 go 1.12
