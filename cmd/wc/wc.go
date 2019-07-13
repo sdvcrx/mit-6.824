@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 	"os"
-	"log"
 	"mitlab/mapreduce"
 )
 
@@ -18,7 +17,6 @@ import (
 // of key/value pairs.
 //
 func mapF(filename string, contents string) []mapreduce.KeyValue {
-	log.Printf("filename: %s", filename);
 	var kvs []mapreduce.KeyValue;
 	words := strings.FieldsFunc(contents, func(c rune) bool {
 		return !unicode.IsLetter(c) && !unicode.IsNumber(c);

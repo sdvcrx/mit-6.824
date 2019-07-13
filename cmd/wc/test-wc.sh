@@ -9,3 +9,5 @@ else
   echo "Passed test" > /dev/stderr
 fi
 
+rm -f diff.out
+rm mrtmp*
