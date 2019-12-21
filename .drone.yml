@@ -2,7 +2,7 @@ kind: pipeline
 name: default
 
 steps:
-- name: test
+- name: Test MapReduce
   image: golang
   commands:
   - ./test-mr.sh
