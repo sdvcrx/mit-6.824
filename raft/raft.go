@@ -42,6 +42,13 @@ type ApplyMsg struct {
 	CommandIndex int
 }
 
+// Log entry
+type LogEntry struct {
+	Index   int // log index. identifying its position in the log
+	Term    int
+	Command interface{}
+}
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -55,6 +62,24 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	state         RaftState // server state
+	lastHeartbeat time.Time
+
+	// Persistent state on all servers:
+	// (Updated on stable storage before responding to RPCs)
+	currentTerm int // latest term server has seen (initialized to 0 on first boot, increases monotonically)
+	VoteFor     int // candidateId that received vote in current term (or null if none)
+
+	logEntries []LogEntry // log entries
+
+	// Volatile state on all servers:
+	CommitIndex int // index of highest log entry known to be committed (initialized to 0, increases monotonically)
+	LastApplied int // index of highest log entry applied to state machine (initialized to 0, increases monotonically)
+
+	// Volatile state on leaders:
+	// (Reinitialized after election)
+	NextIndex  []int // for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
+	MatchIndex []int // for each server, index of highest log entry known to be replicated on server (initialized to 0, increases monotonically)
 }
 
 // return currentTerm and whether this server
