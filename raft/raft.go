@@ -160,7 +160,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Your code here (2B).
 
-
 	return index, term, isLeader
 }
 
@@ -172,6 +171,75 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
+}
+
+func (rf *Raft) heartbeat() {
+	for {
+		time.Sleep(time.Duration(RandomRange(150, 300)) * time.Millisecond)
+
+		if rf.state == StateLeader {
+			rf.sendHeartbeat()
+			continue
+		}
+
+		dur := time.Now().Sub(rf.lastHeartbeat)
+
+		DPrintf("Dur: %v", dur)
+		if dur.Milliseconds() < 150 {
+			continue
+		}
+		// heartbeat timeout
+		DPrintf("Raft(%d) heartbeat timeout", rf.me)
+
+		// TODO sendRequestVote
+		var wg sync.WaitGroup
+
+		rf.mu.Lock()
+		args := &RequestVoteArgs{
+			Term:        rf.currentTerm,
+			CandidateId: rf.me,
+		}
+		peersLength := len(rf.peers)
+		rf.mu.Unlock()
+		replyCh := make(chan bool, peersLength)
+		DPrintf("Raft(%d) peersLength=%d", rf.me, peersLength)
+
+		for idx := 0; idx < peersLength; idx++ {
+			wg.Add(1)
+
+			go func(i int) {
+				reply := &RequestVoteReply{}
+				if ok := rf.sendRequestVote(i, args, reply); !ok {
+					replyCh <- ok
+				} else {
+					replyCh <- reply.VoteGranted
+				}
+
+				wg.Done()
+			}(idx)
+		}
+
+		wg.Wait()
+		close(replyCh)
+
+		num := 0
+		for result := range replyCh {
+			if result {
+				num += 1
+			}
+		}
+
+		DPrintf("Raft(%d): %d", rf.me, num)
+		if num >= peersLength/2 {
+			DPrintf("Elected!, Raft(%d)", rf.me)
+			rf.mu.Lock()
+			rf.state = StateLeader
+			rf.currentTerm += 1
+			rf.mu.Unlock()
+			rf.sendHeartbeat()
+			// TODO send heartbeat
+		}
+	}
 }
 
 //
@@ -193,10 +261,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.VoteFor = VoteForNull
+
+	rf.lastHeartbeat = time.Now()
+
+	// TODO create a background goroutine that will kick off leader election periodically by
+	//        sending out RequestVote RPCs when it hasn't heard from another peer for a while.
+	go rf.heartbeat()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-
 
 	return rf
 }
