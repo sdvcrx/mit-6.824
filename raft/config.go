@@ -8,7 +8,7 @@ package raft
 // test with the original before submitting.
 //
 
-import "labrpc"
+import "mitlab/labrpc"
 import "log"
 import "sync"
 import "testing"
@@ -311,6 +311,7 @@ func (cfg *config) checkOneLeader() int {
 
 		lastTermWithLeader := -1
 		for term, leaders := range leaders {
+			// check if every terms has only one leader
 			if len(leaders) > 1 {
 				cfg.t.Fatalf("term %d has %d (>1) leaders", term, len(leaders))
 			}
