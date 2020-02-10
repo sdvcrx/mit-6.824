@@ -6,4 +6,8 @@ steps:
   image: golang
   commands:
   - ./test-mr.sh
+
+- name: Test Raft
+  image: golang
+  commands:
   - ./test-raft.sh
