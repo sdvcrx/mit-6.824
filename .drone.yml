@@ -6,3 +6,4 @@ steps:
   image: golang
   commands:
   - ./test-mr.sh
+  - ./test-raft.sh
