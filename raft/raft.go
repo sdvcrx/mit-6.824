@@ -18,8 +18,8 @@ package raft
 //
 
 import (
+	"fmt"
 	"sync"
-	"time"
 
 	"mitlab/labrpc"
 )
@@ -64,8 +64,7 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
-	state         RaftState // server state
-	lastHeartbeat time.Time
+	state RaftState // server state
 
 	// Persistent state on all servers:
 	// (Updated on stable storage before responding to RPCs)
@@ -82,6 +81,14 @@ type Raft struct {
 	// (Reinitialized after election)
 	NextIndex  []int // for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
 	MatchIndex []int // for each server, index of highest log entry known to be replicated on server (initialized to 0, increases monotonically)
+
+	electionTimer  *RaftTimer
+	heartbeatTimer *RaftTimer
+	resetTimerCh   chan struct{}
+}
+
+func (rf *Raft) String() string {
+	return fmt.Sprintf("Raft(index=%d|state=%s|currentTerm=%d)", rf.me, rf.state, rf.currentTerm)
 }
 
 // return currentTerm and whether this server
@@ -173,72 +180,102 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 }
 
+func (rf *Raft) downgradeToFollower() {
+	// TODO
+	DPrintf("Downgrade to follower state")
+}
+
+// check RPC's term > currentTerm
+func (rf *Raft) isValidRPC(term int) bool {
+	// If RPC request or response contains term T > currentTerm:
+	// set currentTerm = T, convert to follower (§5.1)
+	return term <= rf.currentTerm
+}
+
+func (rf *Raft) checkElectionTimeout() {
+	for {
+		if !rf.state.Is("follower") {
+			rf.electionTimer.Stop()
+			return
+		}
+
+		select {
+		case <-rf.electionTimer.C:
+			rf.triggerElection()
+		case <-rf.resetTimerCh:
+			rf.electionTimer.Reset()
+		}
+	}
+}
+
 func (rf *Raft) heartbeat() {
 	for {
-		time.Sleep(time.Duration(RandomRange(150, 300)) * time.Millisecond)
+		if !rf.state.Is("leader") {
+			rf.heartbeatTimer.Stop()
+			return
+		}
 
-		if rf.state == StateLeader {
+		select {
+		case <-rf.heartbeatTimer.C:
+			rf.heartbeatTimer.Reset()
 			rf.sendHeartbeat()
-			continue
 		}
+	}
+}
 
-		dur := time.Now().Sub(rf.lastHeartbeat)
+func (rf *Raft) upgradeToLeader() {
+	rf.electionTimer.Stop()
+	rf.mu.Lock()
+	rf.state = StateLeader
+	rf.mu.Unlock()
+	rf.sendHeartbeat()
+	rf.heartbeatTimer = NewHeartbeatTimer()
+	go rf.heartbeat()
+}
 
-		DPrintf("Dur: %v", dur)
-		if dur.Milliseconds() < 150 {
-			continue
-		}
-		// heartbeat timeout
-		DPrintf("Raft(%d) heartbeat timeout", rf.me)
+func (rf *Raft) triggerElection() {
+	rf.mu.Lock()
+	rf.state = StateCandidate
+	rf.currentTerm += 1
 
-		// TODO sendRequestVote
-		var wg sync.WaitGroup
+	DPrintf("%s timeout, start election", rf)
+	term := rf.currentTerm
+	peersLength := len(rf.peers)
+	rf.mu.Unlock()
 
-		rf.mu.Lock()
-		args := &RequestVoteArgs{
-			Term:        rf.currentTerm,
-			CandidateId: rf.me,
-		}
-		peersLength := len(rf.peers)
-		rf.mu.Unlock()
-		replyCh := make(chan bool, peersLength)
-		DPrintf("Raft(%d) peersLength=%d", rf.me, peersLength)
+	var wg sync.WaitGroup
+	result := make(chan RequestVoteReply, peersLength)
 
-		for idx := 0; idx < peersLength; idx++ {
-			wg.Add(1)
-
-			go func(i int) {
-				reply := &RequestVoteReply{}
-				if ok := rf.sendRequestVote(i, args, reply); !ok {
-					replyCh <- ok
-				} else {
-					replyCh <- reply.VoteGranted
-				}
-
-				wg.Done()
-			}(idx)
-		}
-
-		wg.Wait()
-		close(replyCh)
-
-		num := 0
-		for result := range replyCh {
-			if result {
-				num += 1
+	for i := 0; i < peersLength; i++ {
+		wg.Add(1)
+		go func(i int) {
+			req := RequestVoteArgs{
+				Term:        term,
+				CandidateId: rf.me,
 			}
-		}
+			reply := RequestVoteReply{}
+			rf.sendRequestVote(i, &req, &reply)
+			result <- reply
+			wg.Done()
+		}(i)
+	}
 
-		DPrintf("Raft(%d): %d", rf.me, num)
-		if num >= peersLength/2 {
-			DPrintf("Elected!, Raft(%d)", rf.me)
-			rf.mu.Lock()
-			rf.state = StateLeader
-			rf.currentTerm += 1
-			rf.mu.Unlock()
-			rf.sendHeartbeat()
-			// TODO send heartbeat
+	// TODO handle RPC timeout
+	wg.Wait()
+	close(result)
+	vote := 0
+	for item := range result {
+		if item.VoteGranted {
+			vote += 1
 		}
+	}
+
+	if vote >= peersLength/2 {
+		DPrintf("%s Vote granted, got %d votes", rf, vote)
+		rf.upgradeToLeader()
+	} else {
+		DPrintf("%s Vote deny, got %d votes", rf, vote)
+		rf.electionTimer.Reset()
 	}
 }
 
@@ -261,13 +298,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.state = StateFollower
 	rf.VoteFor = VoteForNull
 
-	rf.lastHeartbeat = time.Now()
+	rf.resetTimerCh = make(chan struct{}, 1)
+	rf.electionTimer = NewElectionTimer()
 
 	// TODO create a background goroutine that will kick off leader election periodically by
 	//        sending out RequestVote RPCs when it hasn't heard from another peer for a while.
-	go rf.heartbeat()
+	// go rf.heartbeat()
+	go rf.checkElectionTimeout()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())

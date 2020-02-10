@@ -1,8 +1,6 @@
 package raft
 
-import (
-	"time"
-)
+import "log"
 
 //
 // example RequestVote RPC arguments structure.
@@ -30,26 +28,31 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	currentTerm := rf.currentTerm
+	if args.CandidateId == rf.me {
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = true
+		return
+	}
 
-	reply.Term = currentTerm
-
-	if currentTerm > args.Term {
+	// Your code here (2A, 2B).
+	if args.Term <= rf.currentTerm {
+		DPrintf("%s receive invalid rpc.Term: %d", rf, args.Term)
 		reply.VoteGranted = false
 		return
 	}
 
-	if rf.VoteFor != VoteForNull {
-		reply.VoteGranted = false
-		return
-	}
-
-	rf.VoteFor = args.Term
+	rf.currentTerm = args.Term
+	// FIXME clear VoteFor
+	rf.VoteFor = args.CandidateId
+	reply.Term = rf.currentTerm
+	// TODO vote granted
 	reply.VoteGranted = true
+	DPrintf("%s vote for %d", rf, args.CandidateId)
+
+	rf.resetTimerCh <- struct{}{}
 	return
 }
 
@@ -98,10 +101,10 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	DPrintf("Raft(%d) received", rf.me)
+	// DPrintf("Raft(%d) received", rf.me)
 	if len(args.Entries) == 0 {
 		// handle heartbeat
-		rf.lastHeartbeat = time.Now()
+		rf.resetTimerCh <- struct{}{}
 		return
 	}
 }
@@ -112,14 +115,16 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func (rf *Raft) sendHeartbeat() {
-	if rf.state != StateLeader {
-		return
-	}
-
 	rf.mu.Lock()
 	term := rf.currentTerm
 	peersLength := len(rf.peers)
+	state := rf.state
 	rf.mu.Unlock()
+
+	if !state.Is("leader") {
+		log.Fatalln("invalid state", rf.state)
+		return
+	}
 
 	args := &AppendEntriesArgs{
 		Term:    term,
