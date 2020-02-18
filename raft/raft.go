@@ -19,9 +19,11 @@ package raft
 
 import (
 	"fmt"
+	"log"
 	"sync"
 
 	"mitlab/labrpc"
+	"time"
 )
 
 // import "bytes"
@@ -194,7 +196,7 @@ func (rf *Raft) isValidRPC(term int) bool {
 
 func (rf *Raft) checkElectionTimeout() {
 	for {
-		if !rf.state.Is("follower") {
+		if rf.state.Is("leader") {
 			rf.electionTimer.Stop()
 			return
 		}
@@ -223,30 +225,63 @@ func (rf *Raft) heartbeat() {
 	}
 }
 
-func (rf *Raft) upgradeToLeader() {
+func (rf *Raft) becomeLeader() {
+	if rf.state.Is("leader") {
+		log.Fatalf("%s is leader already", rf)
+	}
+
 	rf.electionTimer.Stop()
+
 	rf.mu.Lock()
 	rf.state = StateLeader
 	rf.mu.Unlock()
-	rf.sendHeartbeat()
+
 	rf.heartbeatTimer = NewHeartbeatTimer()
 	go rf.heartbeat()
+	rf.sendHeartbeat()
+	DPrintf("%s become leader", rf)
+}
+
+func (rf *Raft) becomeCandidate() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	rf.state = StateCandidate
+	rf.currentTerm++
+	rf.VoteFor = rf.me
+}
+
+func (rf *Raft) becomeFollower(term int) {
+	if rf.state.Is("follower") {
+		log.Fatalf("%s is follower already", rf)
+	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	rf.state = StateFollower
+	rf.currentTerm = term
+	rf.VoteFor = VoteForNull
+	rf.electionTimer.Reset()
+	go rf.checkElectionTimeout()
+	DPrintf("%s ====> become a follower", rf)
 }
 
 func (rf *Raft) triggerElection() {
+	rf.becomeCandidate()
 	rf.mu.Lock()
-	rf.state = StateCandidate
-	rf.currentTerm += 1
-
 	DPrintf("%s timeout, start election", rf)
 	term := rf.currentTerm
 	peersLength := len(rf.peers)
 	rf.mu.Unlock()
 
 	var wg sync.WaitGroup
-	result := make(chan RequestVoteReply, peersLength)
+	result := make(chan RequestVoteReply, peersLength-1)
 
 	for i := 0; i < peersLength; i++ {
+		if i == rf.me {
+			continue
+		}
 		wg.Add(1)
 		go func(i int) {
 			req := RequestVoteArgs{
@@ -260,19 +295,32 @@ func (rf *Raft) triggerElection() {
 		}(i)
 	}
 
-	// TODO handle RPC timeout
-	wg.Wait()
-	close(result)
-	vote := 0
-	for item := range result {
+	done := make(chan struct{}, 1)
+	go func() {
+		wg.Wait()
+		done <- struct{}{}
+	}()
+
+	select {
+	case <-time.After(100 * time.Millisecond):
+		DPrintf("raft election timeout")
+	case <-done:
+		close(done)
+		close(result)
+	}
+
+	vote := 1
+	resultNum := len(result)
+	for i := 0; i < resultNum; i++ {
+		item := <- result
 		if item.VoteGranted {
-			vote += 1
+			vote++
 		}
 	}
 
-	if vote >= peersLength/2 {
+	if vote >= peersLength/2+1 {
 		DPrintf("%s Vote granted, got %d votes", rf, vote)
-		rf.upgradeToLeader()
+		rf.becomeLeader()
 	} else {
 		DPrintf("%s Vote deny, got %d votes", rf, vote)
 		rf.electionTimer.Reset()

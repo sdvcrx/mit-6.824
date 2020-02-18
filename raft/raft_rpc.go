@@ -1,7 +1,5 @@
 package raft
 
-import "log"
-
 //
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
@@ -28,31 +26,42 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 
 	if args.CandidateId == rf.me {
+		rf.mu.Lock()
+		rf.VoteFor = args.CandidateId
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = true
+		rf.mu.Unlock()
 		return
 	}
 
 	// Your code here (2A, 2B).
 	if args.Term <= rf.currentTerm {
+		rf.mu.Lock()
+		rf.VoteFor = VoteForNull
+		rf.mu.Unlock()
 		DPrintf("%s receive invalid rpc.Term: %d", rf, args.Term)
 		reply.VoteGranted = false
 		return
 	}
 
-	rf.currentTerm = args.Term
-	// FIXME clear VoteFor
-	rf.VoteFor = args.CandidateId
+	rf.resetTimerCh <- struct{}{}
+	if rf.state.Is("leader") {
+		rf.becomeFollower(args.Term)
+		rf.VoteFor = args.CandidateId
+	} else {
+		rf.mu.Lock()
+		rf.currentTerm = args.Term
+		rf.VoteFor = args.CandidateId
+		rf.mu.Unlock()
+	}
+
 	reply.Term = rf.currentTerm
-	// TODO vote granted
 	reply.VoteGranted = true
+
 	DPrintf("%s vote for %d", rf, args.CandidateId)
 
-	rf.resetTimerCh <- struct{}{}
 	return
 }
 
@@ -101,12 +110,19 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	// DPrintf("Raft(%d) received", rf.me)
+	if rf.state.Is("leader") && rf.currentTerm < args.Term {
+		rf.becomeFollower(args.Term)
+	}
+
+	reply.AppendSuccess = false
+
 	if len(args.Entries) == 0 {
 		// handle heartbeat
 		rf.resetTimerCh <- struct{}{}
 		return
 	}
+
+	return
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -122,7 +138,6 @@ func (rf *Raft) sendHeartbeat() {
 	rf.mu.Unlock()
 
 	if !state.Is("leader") {
-		log.Fatalln("invalid state", rf.state)
 		return
 	}
 
