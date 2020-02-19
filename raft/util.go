@@ -38,6 +38,10 @@ type RaftTimer struct {
 
 func (rt *RaftTimer) Reset() {
 	rt.duration = rt.genFunc()
+
+	// stop before reset timer
+	// https://pkg.go.dev/time?tab=doc#Timer.Reset
+	rt.timer.Stop()
 	rt.timer.Reset(rt.duration)
 }
 
