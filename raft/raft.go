@@ -66,7 +66,8 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
-	state RaftState // server state
+	state  RaftState // server state
+	Killed bool      // server is killed
 
 	// Persistent state on all servers:
 	// (Updated on stable storage before responding to RPCs)
@@ -87,6 +88,7 @@ type Raft struct {
 	electionTimer  *RaftTimer
 	heartbeatTimer *RaftTimer
 	resetTimerCh   chan struct{}
+	killCh         chan struct{}
 }
 
 func (rf *Raft) String() string {
@@ -180,6 +182,17 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
+	// if rf.electionTimer != nil {
+	// 	rf.electionTimer.Stop()
+	// }
+	// if rf.heartbeatTimer != nil {
+	// 	rf.heartbeatTimer.Stop()
+	// }
+	// rf.killCh <- struct{}{}
+	// rf.mu.Lock()
+	// defer rf.mu.Unlock()
+	// rf.Killed = true
+	// DPrintf("%s killed", rf)
 }
 
 func (rf *Raft) downgradeToFollower() {
@@ -196,7 +209,11 @@ func (rf *Raft) isValidRPC(term int) bool {
 
 func (rf *Raft) checkElectionTimeout() {
 	for {
-		if rf.state.Is("leader") {
+		rf.mu.Lock()
+		state := rf.state
+		rf.mu.Unlock()
+
+		if state.Is("leader") {
 			rf.electionTimer.Stop()
 			return
 		}
@@ -206,13 +223,19 @@ func (rf *Raft) checkElectionTimeout() {
 			rf.triggerElection()
 		case <-rf.resetTimerCh:
 			rf.electionTimer.Reset()
+		case <-rf.killCh:
+			return
 		}
 	}
 }
 
 func (rf *Raft) heartbeat() {
 	for {
-		if !rf.state.Is("leader") {
+		rf.mu.Lock()
+		state := rf.state
+		rf.mu.Unlock()
+
+		if !state.Is("leader") {
 			rf.heartbeatTimer.Stop()
 			return
 		}
@@ -221,25 +244,27 @@ func (rf *Raft) heartbeat() {
 		case <-rf.heartbeatTimer.C:
 			rf.heartbeatTimer.Reset()
 			rf.sendHeartbeat()
+		case <-rf.killCh:
+			return
 		}
 	}
 }
 
 func (rf *Raft) becomeLeader() {
+	rf.mu.Lock()
 	if rf.state.Is("leader") {
 		log.Fatalf("%s is leader already", rf)
 	}
 
-	rf.electionTimer.Stop()
-
-	rf.mu.Lock()
 	rf.state = StateLeader
 	rf.mu.Unlock()
+
+	rf.electionTimer.Stop()
 
 	rf.heartbeatTimer = NewHeartbeatTimer()
 	go rf.heartbeat()
 	rf.sendHeartbeat()
-	DPrintf("%s become leader", rf)
+	// DPrintf("%s become leader", rf)
 }
 
 func (rf *Raft) becomeCandidate() {
@@ -252,25 +277,25 @@ func (rf *Raft) becomeCandidate() {
 }
 
 func (rf *Raft) becomeFollower(term int) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
 	if rf.state.Is("follower") {
 		log.Fatalf("%s is follower already", rf)
 	}
-
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 
 	rf.state = StateFollower
 	rf.currentTerm = term
 	rf.VoteFor = VoteForNull
 	rf.electionTimer.Reset()
 	go rf.checkElectionTimeout()
-	DPrintf("%s ====> become a follower", rf)
+	// DPrintf("%s ====> become a follower", rf)
 }
 
 func (rf *Raft) triggerElection() {
 	rf.becomeCandidate()
 	rf.mu.Lock()
-	DPrintf("%s timeout, start election", rf)
+	// DPrintf("%s timeout, start election", rf)
 	term := rf.currentTerm
 	peersLength := len(rf.peers)
 	rf.mu.Unlock()
@@ -312,7 +337,7 @@ func (rf *Raft) triggerElection() {
 	vote := 1
 	resultNum := len(result)
 	for i := 0; i < resultNum; i++ {
-		item := <- result
+		item := <-result
 		if item.VoteGranted {
 			vote++
 		}
@@ -350,6 +375,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.VoteFor = VoteForNull
 
 	rf.resetTimerCh = make(chan struct{}, 1)
+	rf.killCh = make(chan struct{}, 1)
 	rf.electionTimer = NewElectionTimer()
 
 	// TODO create a background goroutine that will kick off leader election periodically by

@@ -29,15 +29,21 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	if args.CandidateId == rf.me {
 		rf.mu.Lock()
+
 		rf.VoteFor = args.CandidateId
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = true
+
 		rf.mu.Unlock()
 		return
 	}
 
+	rf.mu.Lock()
+	currentTerm := rf.currentTerm
+	rf.mu.Unlock()
+
 	// Your code here (2A, 2B).
-	if args.Term <= rf.currentTerm {
+	if args.Term <= currentTerm {
 		rf.mu.Lock()
 		rf.VoteFor = VoteForNull
 		rf.mu.Unlock()
@@ -57,7 +63,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.mu.Unlock()
 	}
 
-	reply.Term = rf.currentTerm
+	reply.Term = currentTerm
 	reply.VoteGranted = true
 
 	DPrintf("%s vote for %d", rf, args.CandidateId)
@@ -110,7 +116,12 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	if rf.state.Is("leader") && rf.currentTerm < args.Term {
+	rf.mu.Lock()
+	state := rf.state
+	currentTerm := rf.currentTerm
+	rf.mu.Unlock()
+
+	if state.Is("leader") && currentTerm < args.Term {
 		rf.becomeFollower(args.Term)
 	}
 
