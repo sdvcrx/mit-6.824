@@ -7,3 +7,9 @@
 ```bash
 ./test-mr.sh
 ```
+
+## lab2 raft
+
+```bash
+./test-raft.sh
+```
