@@ -268,16 +268,17 @@ func (rf *Raft) heartbeat() {
 	for {
 		rf.mu.Lock()
 		state := rf.state
+		timer := rf.heartbeatTimer
 		rf.mu.Unlock()
 
 		if !state.Is("leader") {
-			rf.heartbeatTimer.Stop()
+			timer.Stop()
 			return
 		}
 
 		select {
-		case <-rf.heartbeatTimer.C:
-			rf.heartbeatTimer.Reset()
+		case <-timer.C:
+			timer.Reset()
 			rf.sendHeartbeat()
 		case <-rf.killCh:
 			return
@@ -300,11 +301,14 @@ func (rf *Raft) becomeLeader() {
 	rf.NextIndex = genNextIndex(lastIndex+1, len(rf.peers))
 	rf.MatchIndex = genNextIndex(lastIndex, len(rf.peers))
 
-	rf.mu.Unlock()
-
 	rf.electionTimer.Stop()
 
+	if rf.heartbeatTimer != nil {
+		rf.heartbeatTimer.Stop()
+	}
 	rf.heartbeatTimer = NewHeartbeatTimer()
+	rf.mu.Unlock()
+
 	go rf.heartbeat()
 	rf.sendHeartbeat()
 }

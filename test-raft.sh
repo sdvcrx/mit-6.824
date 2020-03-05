@@ -4,6 +4,7 @@ cases=(
     "TestInitialElection2A"
     "TestReElection2A"
     "TestBasicAgree2B"
+    "testFailAgree2B"
 )
 
 for testcase in "${cases[@]}"; do
