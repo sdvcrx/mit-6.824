@@ -99,3 +99,27 @@ func NewHeartbeatTimer() *RaftTimer {
 		genFunc:  genFunc,
 	}
 }
+
+func genNextIndex(val int, len int) []int {
+	nextIndex := make([]int, len)
+
+	for i := 0; i < len; i++ {
+		nextIndex[i] = val
+	}
+
+	return nextIndex
+}
+
+func getLastLogEntry(entries []LogEntry) *LogEntry {
+	entriesLength := len(entries)
+	if entriesLength == 0 {
+		return &LogEntry{}
+	}
+
+	return &entries[entriesLength-1]
+}
+
+func getLastLogIndex(entries []LogEntry) int {
+	entry := getLastLogEntry(entries)
+	return entry.Index
+}

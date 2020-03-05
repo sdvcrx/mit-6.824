@@ -151,6 +151,20 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 }
 
+func (rf *Raft) applyEntry(entry LogEntry) {
+	msg := ApplyMsg{
+		CommandValid: true,
+		Command:      entry.Command,
+		CommandIndex: entry.Index,
+	}
+	rf.applyCh <- msg
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	DPrintf("<- %s, command %+v", rf, msg)
+	rf.LastApplied = msg.CommandIndex
+}
+
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -177,7 +191,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return index, term, isLeader
 	}
 
-	entryIndex := rf.LastApplied + 1
+	prevLog := getLastLogEntry(rf.logEntries)
+	entryIndex := prevLog.Index + 1
 	entry := LogEntry{
 		Index:   entryIndex,
 		Term:    term,
@@ -185,19 +200,14 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	DPrintf("%s append entry: %v", rf, command)
 	rf.logEntries = append(rf.logEntries, entry)
-	rf.LastApplied = entryIndex
-
 	rf.mu.Unlock()
 
 	rf.doAppendEntries(entry)
-	DPrintf("finished %s", rf)
-	msg := ApplyMsg{
-		CommandValid: true,
-		Command:      command,
-		CommandIndex: entryIndex,
-	}
-	rf.applyCh <- msg
-	DPrintf("<- %s, command %+v", rf, msg)
+
+	// TODO set CommitIndex
+	// rf.mu.Lock()
+	// rf.CommitIndex = entryIndex
+	// rf.mu.Unlock()
 
 	// Your code here (2B).
 
@@ -283,6 +293,13 @@ func (rf *Raft) becomeLeader() {
 
 	rf.state = StateLeader
 	DPrintf("%s become leader", rf)
+
+	lastIndex := getLastLogIndex(rf.logEntries)
+	rf.CommitIndex = lastIndex
+	rf.LastApplied = lastIndex
+	rf.NextIndex = genNextIndex(lastIndex+1, len(rf.peers))
+	rf.MatchIndex = genNextIndex(lastIndex, len(rf.peers))
+
 	rf.mu.Unlock()
 
 	rf.electionTimer.Stop()
@@ -303,7 +320,6 @@ func (rf *Raft) becomeCandidate() {
 
 func (rf *Raft) becomeFollower(term int) {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 
 	if rf.state.Is("follower") {
 		log.Fatalf("%s is follower already", rf)
@@ -312,9 +328,11 @@ func (rf *Raft) becomeFollower(term int) {
 	rf.state = StateFollower
 	rf.currentTerm = term
 	rf.VoteFor = VoteForNull
-	rf.electionTimer.Reset()
+	DPrintf("%s become follower", rf)
+	rf.mu.Unlock()
+
+	rf.resetTimerCh <- struct{}{}
 	go rf.checkElectionTimeout()
-	// DPrintf("%s ====> become a follower", rf)
 }
 
 func (rf *Raft) triggerElection() {
@@ -365,6 +383,9 @@ func (rf *Raft) triggerElection() {
 		item := <-result
 		if item.VoteGranted {
 			vote++
+		} else if !item.VoteGranted && item.Term > term {
+			rf.becomeFollower(item.Term)
+			return
 		}
 	}
 
@@ -375,6 +396,22 @@ func (rf *Raft) triggerElection() {
 		DPrintf("%s Vote deny, got %d votes", rf, vote)
 		rf.electionTimer.Reset()
 	}
+}
+
+func (rf *Raft) isSameLogEntries(entryIndex int, entryTerm int) bool {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	entriesLength := len(rf.logEntries)
+	DPrintf("%s isSameLogEntries, idx=%d, len=%d", rf, entryIndex, entriesLength)
+	if entriesLength == 0 {
+		return true
+	} else if entriesLength < entryIndex {
+		return false
+	}
+	entry := rf.logEntries[entryIndex-1]
+
+	return entry.Index == entryIndex && entry.Term == entryTerm
 }
 
 //
