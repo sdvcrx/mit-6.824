@@ -1,5 +1,7 @@
 package raft
 
+import "sync"
+
 //
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
@@ -106,12 +108,16 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 type AppendEntriesArgs struct {
-	Term      int
-	NextIndex int
-	Entries   []LogEntry
+	Term         int
+	LeaderId     int
+	PrevLogIndex int // index of log entry immediately preceding new ones
+	PrevLogTerm  int // term of prevLogIndex entry
+	Entries      []LogEntry
+	LeaderCommit int // leader's commitIndex
 }
 
 type AppendEntriesReply struct {
+	Term          int  // current term
 	AppendSuccess bool // append successed or rejected
 }
 
@@ -131,7 +137,28 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// handle heartbeat
 		rf.resetTimerCh <- struct{}{}
 		return
+	} else {
+		rf.resetTimerCh <- struct{}{}
+		// TODO check log index/term
+		// TODO append negotiate
+		rf.mu.Lock()
+
+		DPrintf("%s append log %v", rf, args.Entries)
+		rf.logEntries = append(rf.logEntries, args.Entries...)
+
+		for _, entry := range args.Entries {
+			msg := ApplyMsg{
+				CommandValid: true,
+				Command:      entry.Command,
+				CommandIndex: entry.Index,
+			}
+			rf.applyCh <- msg
+		}
+
+		rf.mu.Unlock()
 	}
+
+	reply.AppendSuccess = true
 
 	return
 }
@@ -163,4 +190,35 @@ func (rf *Raft) sendHeartbeat() {
 		}
 		go rf.sendAppendEntries(i, args, &AppendEntriesReply{})
 	}
+}
+
+func (rf *Raft) doAppendEntries(entry LogEntry) {
+	rf.mu.Lock()
+	term := rf.currentTerm
+	peersLength := len(rf.peers)
+	state := rf.state
+	rf.mu.Unlock()
+
+	if !state.Is("leader") {
+		return
+	}
+
+	DPrintf("%s do append entry %v", rf, entry)
+	var wg sync.WaitGroup
+
+	args := &AppendEntriesArgs{
+		Term:    term,
+		Entries: []LogEntry{entry},
+	}
+	for i := 0; i < peersLength; i++ {
+		if i == rf.me {
+			continue
+		}
+		wg.Add(1)
+		go func(i int) {
+			rf.sendAppendEntries(i, args, &AppendEntriesReply{})
+			wg.Done()
+		}(i)
+	}
+	wg.Wait()
 }

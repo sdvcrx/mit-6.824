@@ -1,6 +1,10 @@
 #!/bin/bash
 
-cases=("TestInitialElection2A" "TestReElection2A")
+cases=(
+    "TestInitialElection2A"
+    "TestReElection2A"
+    "TestBasicAgree2B"
+)
 
 for testcase in "${cases[@]}"; do
     echo "===> ${testcase}"

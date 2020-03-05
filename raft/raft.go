@@ -89,6 +89,7 @@ type Raft struct {
 	heartbeatTimer *RaftTimer
 	resetTimerCh   chan struct{}
 	killCh         chan struct{}
+	applyCh        chan ApplyMsg
 }
 
 func (rf *Raft) String() string {
@@ -165,13 +166,42 @@ func (rf *Raft) readPersist(data []byte) {
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	rf.mu.Lock()
+
 	index := -1
-	term := -1
-	isLeader := true
+	term := rf.currentTerm
+	isLeader := rf.state.Is("leader")
+
+	if !isLeader {
+		rf.mu.Unlock()
+		return index, term, isLeader
+	}
+
+	entryIndex := rf.LastApplied + 1
+	entry := LogEntry{
+		Index:   entryIndex,
+		Term:    term,
+		Command: command,
+	}
+	DPrintf("%s append entry: %v", rf, command)
+	rf.logEntries = append(rf.logEntries, entry)
+	rf.LastApplied = entryIndex
+
+	rf.mu.Unlock()
+
+	rf.doAppendEntries(entry)
+	DPrintf("finished %s", rf)
+	msg := ApplyMsg{
+		CommandValid: true,
+		Command:      command,
+		CommandIndex: entryIndex,
+	}
+	rf.applyCh <- msg
+	DPrintf("<- %s, command %+v", rf, msg)
 
 	// Your code here (2B).
 
-	return index, term, isLeader
+	return entryIndex, term, isLeader
 }
 
 //
@@ -193,11 +223,6 @@ func (rf *Raft) Kill() {
 	// defer rf.mu.Unlock()
 	// rf.Killed = true
 	// DPrintf("%s killed", rf)
-}
-
-func (rf *Raft) downgradeToFollower() {
-	// TODO
-	DPrintf("Downgrade to follower state")
 }
 
 // check RPC's term > currentTerm
@@ -257,6 +282,7 @@ func (rf *Raft) becomeLeader() {
 	}
 
 	rf.state = StateLeader
+	DPrintf("%s become leader", rf)
 	rf.mu.Unlock()
 
 	rf.electionTimer.Stop()
@@ -264,7 +290,6 @@ func (rf *Raft) becomeLeader() {
 	rf.heartbeatTimer = NewHeartbeatTimer()
 	go rf.heartbeat()
 	rf.sendHeartbeat()
-	// DPrintf("%s become leader", rf)
 }
 
 func (rf *Raft) becomeCandidate() {
@@ -295,7 +320,7 @@ func (rf *Raft) becomeFollower(term int) {
 func (rf *Raft) triggerElection() {
 	rf.becomeCandidate()
 	rf.mu.Lock()
-	// DPrintf("%s timeout, start election", rf)
+	DPrintf("%s timeout, start election", rf)
 	term := rf.currentTerm
 	peersLength := len(rf.peers)
 	rf.mu.Unlock()
@@ -377,6 +402,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.resetTimerCh = make(chan struct{}, 1)
 	rf.killCh = make(chan struct{}, 1)
 	rf.electionTimer = NewElectionTimer()
+	rf.applyCh = applyCh
 
 	// TODO create a background goroutine that will kick off leader election periodically by
 	//        sending out RequestVote RPCs when it hasn't heard from another peer for a while.
