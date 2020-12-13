@@ -200,8 +200,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	rf.mu.Lock()
 	DPrintf("%s append log %+v", rf, args.Entries)
-	// commit logEntries (may strip uncommitted logs)
-	rf.logEntries = append(rf.logEntries[:args.LeaderCommit], args.Entries...)
+	if len(rf.logEntries) > args.LeaderCommit {
+		// commit logEntries (may strip uncommitted logs)
+		rf.logEntries = append(rf.logEntries[:args.LeaderCommit], args.Entries...)
+	} else {
+		rf.logEntries = append(rf.logEntries, args.Entries...)
+	}
 	last := getLastLogEntry(rf.logEntries)
 	rf.CommitIndex = last.Index
 	DPrintf("%s set commitIndex to %d", rf, rf.CommitIndex)
