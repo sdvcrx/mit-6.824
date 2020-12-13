@@ -46,6 +46,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	currentTerm := rf.currentTerm
 	state := rf.state
+	lastLog := getLastLogEntry(rf.logEntries)
 	rf.mu.Unlock()
 
 	reply.Term = currentTerm
@@ -55,11 +56,23 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.mu.Lock()
 		rf.VoteFor = VoteForNull
 		rf.mu.Unlock()
-		DPrintf("%s receive invalid rpc.Term: %d", rf, args.Term)
+		DPrintf("%s receive invalid rpc.Term: %d, from: %d", rf, args.Term, args.CandidateId)
 		reply.VoteGranted = false
 		return
 	}
-
+	/**
+	 * NOTE
+	 * candidate’s log is at least as up-to-date as receiver’s log then vote
+	 * http://vearne.cc/archives/1510
+	 * candidate.LastLogTerm >= receiver.LastLogTerm
+	 * candidate.LastLogIndex >= receiver.LastLogIndex
+	 */
+	if args.LastLogIndex < lastLog.Index || args.LastLogTerm < lastLog.Term {
+		DPrintf("%s: candidate(%d) log is not up-to-date, rejected", rf, args.CandidateId)
+		reply.VoteGranted = false
+		rf.VoteFor = VoteForNull
+		return
+	}
 	rf.resetTimerCh <- struct{}{}
 
 	if state.Is("leader") {
@@ -140,21 +153,39 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	currentTerm := rf.currentTerm
 	rf.mu.Unlock()
 
+	// prevent old leader rejoin
 	if !state.Is("follower") && currentTerm < args.Term {
 		rf.becomeFollower(args.Term)
+	}
+
+	// update Follower currentTerm
+	// FIXME Reply false if term < currentTerm (§5.1)
+	if currentTerm < args.Term {
+		rf.mu.Lock()
+		rf.currentTerm = args.Term
+		rf.mu.Unlock()
 	}
 
 	reply.Success = args.Term >= currentTerm
 	reply.Term = currentTerm
 
 	if !reply.Success {
-		DPrintf("%s term mismatch, return false", rf)
+		DPrintf("%s term mismatch, got: %d, current: %d, return false", rf, args.Term, currentTerm)
 		return
 	}
 
+	// DPrintf("%s AppendEntries %+v ==== %+v", rf, args, rf.logEntries)
 	// reset heartbeat timer
 	rf.resetTimerCh <- struct{}{}
+
 	if len(args.Entries) == 0 {
+		// handle heartbeat msg
+		// 将 rf.logEntries 中未 apply 的消息 apply to state machine
+		if rf.LastApplied < args.LeaderCommit {
+			DPrintf("heartbeat %+v LastApplied=%d, CommitIndex=%d %+v", args, rf.CommitIndex, rf.LastApplied, rf.logEntries)
+
+			rf.applyEntries()
+		}
 		return
 	}
 
@@ -168,13 +199,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	rf.mu.Lock()
-	DPrintf("%s append log %v", rf, args.Entries)
-	rf.logEntries = append(rf.logEntries, args.Entries...)
+	DPrintf("%s append log %+v", rf, args.Entries)
+	// commit logEntries (may strip uncommitted logs)
+	rf.logEntries = append(rf.logEntries[:args.LeaderCommit], args.Entries...)
+	last := getLastLogEntry(rf.logEntries)
+	rf.CommitIndex = last.Index
+	DPrintf("%s set commitIndex to %d", rf, rf.CommitIndex)
 	rf.mu.Unlock()
-
-	for _, entry := range args.Entries {
-		rf.applyEntry(entry)
-	}
 
 	return
 }
@@ -189,6 +220,7 @@ func (rf *Raft) sendHeartbeat() {
 	term := rf.currentTerm
 	peersLength := len(rf.peers)
 	state := rf.state
+	commitIndex := rf.CommitIndex
 	rf.mu.Unlock()
 
 	if !state.Is("leader") {
@@ -196,8 +228,9 @@ func (rf *Raft) sendHeartbeat() {
 	}
 
 	args := &AppendEntriesArgs{
-		Term:    term,
-		Entries: []LogEntry{},
+		Term:         term,
+		Entries:      []LogEntry{},
+		LeaderCommit: commitIndex,
 	}
 
 	for i := 0; i < peersLength; i++ {
@@ -208,6 +241,7 @@ func (rf *Raft) sendHeartbeat() {
 	}
 }
 
+// Send AppendEntries RPC request and make sure it return success (Leader only)
 func (rf *Raft) sendAppendEntries(server int) *AppendEntriesReply {
 	rf.mu.Lock()
 	term := rf.currentTerm
@@ -222,7 +256,7 @@ func (rf *Raft) sendAppendEntries(server int) *AppendEntriesReply {
 
 		rf.mu.Lock()
 		nextIndex := rf.NextIndex[server]
-		DPrintf("nextIndex: %+v", nextIndex)
+		DPrintf("leader.SendAppendEntries nextIndex: %+v", nextIndex)
 		var prevLog LogEntry
 		if nextIndex == 0 {
 			return &reply
@@ -246,6 +280,7 @@ func (rf *Raft) sendAppendEntries(server int) *AppendEntriesReply {
 			PrevLogIndex: prevLog.Index,
 		}
 		ok := rf.sendAppendEntriesRPC(server, args, &reply)
+		DPrintf("server{%d} relay: %+v", server, reply)
 		if reply.Success {
 			rf.mu.Lock()
 			entry := getLastLogEntry(entries)
@@ -263,6 +298,7 @@ func (rf *Raft) sendAppendEntries(server int) *AppendEntriesReply {
 			return &reply
 		}
 
+		DPrintf("%s decrease NextIndex", rf)
 		rf.mu.Lock()
 		rf.NextIndex[server] -= 1
 		rf.mu.Unlock()
@@ -272,6 +308,7 @@ func (rf *Raft) sendAppendEntries(server int) *AppendEntriesReply {
 	}
 }
 
+// leader
 func (rf *Raft) doAppendEntries(entry LogEntry) {
 	rf.mu.Lock()
 	peersLength := len(rf.peers)
@@ -282,7 +319,7 @@ func (rf *Raft) doAppendEntries(entry LogEntry) {
 		return
 	}
 
-	DPrintf("%s do append entry %v", rf, entry)
+	DPrintf("%s do append entry %+v", rf, entry)
 	var wg sync.WaitGroup
 
 	results := make(chan AppendEntriesReply, peersLength)
@@ -305,10 +342,14 @@ func (rf *Raft) doAppendEntries(entry LogEntry) {
 		return
 	}
 	maxTerm := 0
+	successCount := 1
 	for res := range results {
 		DPrintf("results: %+v", res)
 		if maxTerm < res.Term {
 			maxTerm = res.Term
+		}
+		if res.Success {
+			successCount += 1
 		}
 	}
 	DPrintf("found max term: %d", maxTerm)
@@ -319,5 +360,9 @@ func (rf *Raft) doAppendEntries(entry LogEntry) {
 	}
 	rf.mu.Unlock()
 
+	if successCount < peersLength/2+1 {
+		DPrintf("doAppendEntries failed to reach a majority of servers, got: %d, expect: %d", successCount, peersLength/2+1)
+		return
+	}
 	rf.applyEntry(entry)
 }

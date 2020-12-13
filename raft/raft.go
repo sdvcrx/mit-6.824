@@ -93,6 +93,7 @@ type Raft struct {
 }
 
 func (rf *Raft) String() string {
+	// return fmt.Sprintf("Raft(index=%d|state=%s)", rf.me, rf.state)
 	return fmt.Sprintf("Raft(index=%d|state=%s|currentTerm=%d)", rf.me, rf.state, rf.currentTerm)
 }
 
@@ -151,6 +152,35 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 }
 
+// apply log entry to Raft State Machine (RSM)
+func (rf *Raft) applyEntries() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if rf.CommitIndex <= rf.LastApplied {
+		// no unapply logEntries, skipped
+		return
+	}
+
+	logs := rf.logEntries[rf.LastApplied:rf.CommitIndex]
+	if len(logs) == 0 {
+		return
+	}
+
+	DPrintf("%s applyEntries: %+v", rf, logs)
+	for _, entry := range logs {
+		msg := ApplyMsg{
+			CommandValid: true,
+			Command:      entry.Command,
+			CommandIndex: entry.Index,
+		}
+		rf.applyCh <- msg
+	}
+	DPrintf("%s applyEntries success! LastApplied = CommitIndex = %d", rf, rf.CommitIndex)
+	rf.LastApplied = rf.CommitIndex
+}
+
+// deprecated
 func (rf *Raft) applyEntry(entry LogEntry) {
 	msg := ApplyMsg{
 		CommandValid: true,
@@ -161,7 +191,8 @@ func (rf *Raft) applyEntry(entry LogEntry) {
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	DPrintf("<- %s, command %+v", rf, msg)
+	DPrintf("[applyEntry] <- %s, command %+v", rf, msg)
+	rf.CommitIndex = msg.CommandIndex
 	rf.LastApplied = msg.CommandIndex
 }
 
@@ -294,7 +325,14 @@ func (rf *Raft) becomeLeader() {
 
 	rf.state = StateLeader
 	DPrintf("%s become leader", rf)
+	DPrintf("leader logEntries: %+v", rf.logEntries)
 
+	/*
+	 * Paper (5.3)
+	 * When a leader first comes to power,
+	 * it initializes all nextIndex values to
+	 * the index just after the last one in its log
+	 */
 	lastIndex := getLastLogIndex(rf.logEntries)
 	rf.CommitIndex = lastIndex
 	rf.LastApplied = lastIndex
@@ -345,6 +383,8 @@ func (rf *Raft) triggerElection() {
 	DPrintf("%s timeout, start election", rf)
 	term := rf.currentTerm
 	peersLength := len(rf.peers)
+
+	lastLog := getLastLogEntry(rf.logEntries)
 	rf.mu.Unlock()
 
 	var wg sync.WaitGroup
@@ -357,8 +397,10 @@ func (rf *Raft) triggerElection() {
 		wg.Add(1)
 		go func(i int) {
 			req := RequestVoteArgs{
-				Term:        term,
-				CandidateId: rf.me,
+				Term:         term,
+				CandidateId:  rf.me,
+				LastLogIndex: lastLog.Index,
+				LastLogTerm:  lastLog.Term,
 			}
 			reply := RequestVoteReply{}
 			rf.sendRequestVote(i, &req, &reply)
@@ -375,7 +417,7 @@ func (rf *Raft) triggerElection() {
 
 	select {
 	case <-time.After(100 * time.Millisecond):
-		DPrintf("raft election timeout")
+		DPrintf("%s raft election timeout", rf)
 	case <-done:
 		close(done)
 		close(result)
@@ -397,7 +439,7 @@ func (rf *Raft) triggerElection() {
 		DPrintf("%s Vote granted, got %d votes", rf, vote)
 		rf.becomeLeader()
 	} else {
-		DPrintf("%s Vote deny, got %d votes", rf, vote)
+		// DPrintf("%s Vote deny, got %d votes", rf, vote)
 		rf.electionTimer.Reset()
 	}
 }
