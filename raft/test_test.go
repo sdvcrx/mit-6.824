@@ -232,6 +232,7 @@ loop:
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
+				TPrintf("Test (2B): Start append %d\n", 100+i)
 				i, term1, ok := cfg.rafts[leader].Start(100 + i)
 				if term1 != term {
 					return

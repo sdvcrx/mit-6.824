@@ -180,7 +180,7 @@ func (rf *Raft) applyEntries() {
 	rf.LastApplied = rf.CommitIndex
 }
 
-// deprecated
+// only leader
 func (rf *Raft) applyEntry(entry LogEntry) {
 	msg := ApplyMsg{
 		CommandValid: true,
@@ -189,9 +189,9 @@ func (rf *Raft) applyEntry(entry LogEntry) {
 	}
 	rf.applyCh <- msg
 
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	DPrintf("[applyEntry] <- %s, command %+v", rf, msg)
+	// rf.mu.Lock()
+	// defer rf.mu.Unlock()
+	DInfo("[applyEntry] <- %s, command %+v", rf, msg)
 	rf.CommitIndex = msg.CommandIndex
 	rf.LastApplied = msg.CommandIndex
 }
@@ -229,11 +229,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Term:    term,
 		Command: command,
 	}
-	DPrintf("%s append entry: %v", rf, command)
+	DInfo("[Raft.Start] %s append entry: %v\n", rf, command)
 	rf.logEntries = append(rf.logEntries, entry)
-	rf.mu.Unlock()
 
 	rf.doAppendEntries(entry)
+	rf.mu.Unlock()
 
 	// TODO set CommitIndex
 	// rf.mu.Lock()
@@ -297,10 +297,8 @@ func (rf *Raft) checkElectionTimeout() {
 
 func (rf *Raft) heartbeat() {
 	for {
-		rf.mu.Lock()
 		state := rf.state
 		timer := rf.heartbeatTimer
-		rf.mu.Unlock()
 
 		if !state.Is("leader") {
 			timer.Stop()

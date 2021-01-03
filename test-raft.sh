@@ -7,6 +7,7 @@ cases=(
     "TestBasicAgree2B"
     "TestFailAgree2B"
     "TestFailNoAgree2B"
+    "TestConcurrentStarts2B"
 )
 
 for testcase in "${cases[@]}"; do

@@ -220,12 +220,10 @@ func (rf *Raft) sendAppendEntriesRPC(server int, args *AppendEntriesArgs, reply 
 }
 
 func (rf *Raft) sendHeartbeat() {
-	rf.mu.Lock()
 	term := rf.currentTerm
 	peersLength := len(rf.peers)
 	state := rf.state
 	commitIndex := rf.CommitIndex
-	rf.mu.Unlock()
 
 	if !state.Is("leader") {
 		return
@@ -247,10 +245,10 @@ func (rf *Raft) sendHeartbeat() {
 
 // Send AppendEntries RPC request and make sure it return success (Leader only)
 func (rf *Raft) sendAppendEntries(server int) *AppendEntriesReply {
-	rf.mu.Lock()
+	// rf.mu.Lock()
 	term := rf.currentTerm
 	leaderCommitIndex := rf.CommitIndex
-	rf.mu.Unlock()
+	// rf.mu.Unlock()
 
 	for {
 		reply := AppendEntriesReply{
@@ -258,7 +256,7 @@ func (rf *Raft) sendAppendEntries(server int) *AppendEntriesReply {
 			Success: false,
 		}
 
-		rf.mu.Lock()
+		// rf.mu.Lock()
 		nextIndex := rf.NextIndex[server]
 		DPrintf("leader.SendAppendEntries nextIndex: %+v", nextIndex)
 		var prevLog LogEntry
@@ -271,7 +269,7 @@ func (rf *Raft) sendAppendEntries(server int) *AppendEntriesReply {
 
 		// entries that padding to send
 		entries := rf.logEntries[nextIndex-1:]
-		rf.mu.Unlock()
+		// rf.mu.Unlock()
 
 		DPrintf("AppendEntries to server{%d}: %+v, prev=%+v", server, entries, prevLog)
 
@@ -286,10 +284,10 @@ func (rf *Raft) sendAppendEntries(server int) *AppendEntriesReply {
 		ok := rf.sendAppendEntriesRPC(server, args, &reply)
 		DPrintf("server{%d} relay: %+v", server, reply)
 		if reply.Success {
-			rf.mu.Lock()
+			// rf.mu.Lock()
 			entry := getLastLogEntry(entries)
 			rf.NextIndex[server] = entry.Index + 1
-			rf.mu.Unlock()
+			// rf.mu.Unlock()
 			return &reply
 		}
 
@@ -303,9 +301,9 @@ func (rf *Raft) sendAppendEntries(server int) *AppendEntriesReply {
 		}
 
 		DPrintf("%s decrease NextIndex", rf)
-		rf.mu.Lock()
+		// rf.mu.Lock()
 		rf.NextIndex[server] -= 1
-		rf.mu.Unlock()
+		// rf.mu.Unlock()
 		if rf.NextIndex[server] < 1 {
 			log.Fatalf("%s can not find log entries(%d): %+v", rf, server, entries)
 		}
@@ -314,10 +312,10 @@ func (rf *Raft) sendAppendEntries(server int) *AppendEntriesReply {
 
 // leader
 func (rf *Raft) doAppendEntries(entry LogEntry) {
-	rf.mu.Lock()
+	// rf.mu.Lock()
 	peersLength := len(rf.peers)
 	state := rf.state
-	rf.mu.Unlock()
+	// rf.mu.Unlock()
 
 	if !state.Is("leader") {
 		return
@@ -357,12 +355,12 @@ func (rf *Raft) doAppendEntries(entry LogEntry) {
 		}
 	}
 	DPrintf("found max term: %d", maxTerm)
-	rf.mu.Lock()
+	// rf.mu.Lock()
 	if rf.currentTerm < maxTerm {
 		rf.currentTerm = maxTerm
 		go rf.triggerElection()
 	}
-	rf.mu.Unlock()
+	// rf.mu.Unlock()
 
 	if successCount < peersLength/2+1 {
 		DPrintf("doAppendEntries failed to reach a majority of servers, got: %d, expect: %d", successCount, peersLength/2+1)

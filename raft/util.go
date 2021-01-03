@@ -8,11 +8,16 @@ import (
 )
 
 // Debugging
-const Debug = 1
+const Debug = 0
 
 func init() {
 	rand.Seed(time.Now().UnixNano())
 	log.SetFlags(log.Lmicroseconds)
+}
+
+func DInfo(format string, a ...interface{}) (n int, err error) {
+	log.Printf(format, a...)
+	return
 }
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
@@ -23,9 +28,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 func TPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug > 0 {
-		fmt.Printf(format, a...)
-	}
+	fmt.Printf(format, a...)
 	return
 }
 
